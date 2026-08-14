@@ -1,0 +1,24 @@
+# Android
+android/.gradle/
+android/local.properties
+android/**/build/
+*.apk
+*.aab
+
+# Apple
+.DS_Store
+ios/.build/
+ios/DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Editors
+.idea/
+.vscode/
+*.iml
+
+# Secrets and signing
+*.jks
+*.keystore
+*.mobileprovision
+*.p12
