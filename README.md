@@ -23,7 +23,7 @@ I made Free Weights to be free, open source, and completely ad-free. It is a loc
 - `ios/`: native SwiftUI app plus platform-independent workout logic and tests
 
 ## Android
-
+Download from releases or:
 Requirements: Android Studio Ladybug or newer and JDK 17.
 
 ```bash
