@@ -2,7 +2,7 @@
 
 [![Cross-platform CI](https://github.com/tkh2obury/free-weights/actions/workflows/ci.yml/badge.svg)](https://github.com/tkh2obury/free-weights/actions/workflows/ci.yml)
 
-Free Weights is an open-source, local-first workout tracker for Android and iOS. It uses a compact terminal-inspired interface with `#00FF66` as the default text color.
+I made Free Weights to be free, open source, and completely ad-free. It is a local-first workout tracker for Android and iOS with a compact terminal-inspired interface.
 
 ## Features
 
