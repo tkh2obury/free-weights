@@ -2,7 +2,7 @@
 
 [![Cross-platform CI](https://github.com/tkh2obury/free-weights/actions/workflows/ci.yml/badge.svg)](https://github.com/tkh2obury/free-weights/actions/workflows/ci.yml)
 
-I made Free Weights to be free, open source, and completely ad-free. It is a local-first workout tracker for Android and iOS with a compact terminal-inspired interface.
+I made Free Weights to be free, open source, and completely ad-free. It is a local-first workout tracker for Android and iOS with a compact understandable for me interface.
 
 ## Features
 
@@ -11,12 +11,10 @@ I made Free Weights to be free, open source, and completely ad-free. It is a loc
 - Strength and run/walk exercise tracking
 - Advanced warm-up sets and custom ascending or descending pyramid schemes
 - Bar-aware plate loading based on the available equipment
-- Olympic plate colors for 10, 15, 25, 35, 45, and 55 lb plates and their metric equivalents
 - Run/walk interval timer with total and segment-duration charts
 - Exercise progress and session volume history
 - Separate deletion controls for progress, plans, and exercises
 - JSON backup export and restore
-- Theme colors stored locally, with `#00FF66` as the default text color
 - No account, ads, analytics, or network access
 
 ## Repository layout
