@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,6 +23,7 @@ import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
@@ -60,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freeweights.app.model.AppState
+import com.freeweights.app.model.ExerciseDefinition
 import com.freeweights.app.model.ExerciseType
 import com.freeweights.app.model.WeightUnit
 import com.freeweights.app.model.WorkoutLog
@@ -69,7 +72,10 @@ import com.freeweights.app.ui.formatDuration
 import com.freeweights.app.ui.formatWeight
 import com.freeweights.app.util.personalBest
 import com.freeweights.app.util.totalVolume
+import com.freeweights.app.util.addExerciseToSession
+import com.freeweights.app.util.deleteSessionExercise
 import com.freeweights.app.util.deleteSession
+import com.freeweights.app.util.filteredExerciseLibrary
 import com.freeweights.app.util.sessionKey
 import com.freeweights.app.util.runWalkDuration
 import java.text.SimpleDateFormat
@@ -87,6 +93,8 @@ fun ProgressScreen(state: AppState, onStateChange: (AppState) -> Unit) {
     val selectedIsRunWalk = selectedLogs.lastOrNull()?.exerciseType == ExerciseType.RUN_WALK
     val best = personalBest(state.logs)
     var editingLog by remember { mutableStateOf<WorkoutLog?>(null) }
+    var addingToSession by remember { mutableStateOf<List<WorkoutLog>?>(null) }
+    var deletingLog by remember { mutableStateOf<WorkoutLog?>(null) }
     var deletingSession by remember { mutableStateOf<List<WorkoutLog>?>(null) }
     val sessions = state.logs
         .groupBy(::sessionKey)
@@ -187,6 +195,8 @@ fun ProgressScreen(state: AppState, onStateChange: (AppState) -> Unit) {
                 selectedExerciseId = selectedId,
                 onSelectExercise = { selectedId = it },
                 onEdit = { editingLog = it },
+                onAdd = { addingToSession = logs },
+                onRemove = { deletingLog = it },
                 onDelete = { deletingSession = logs },
             )
         }
@@ -199,14 +209,55 @@ fun ProgressScreen(state: AppState, onStateChange: (AppState) -> Unit) {
     }
 
     editingLog?.let { log ->
+        val sessionExerciseIds = state.logs
+            .filter { sessionKey(it) == sessionKey(log) && it.id != log.id }
+            .mapTo(mutableSetOf()) { it.exerciseId }
         EditSessionDialog(
             log = log,
             unitLabel = state.unit.label,
+            exerciseLibrary = state.exerciseLibrary,
+            unavailableExerciseIds = sessionExerciseIds,
             onDismiss = { editingLog = null },
             onSave = { updated ->
                 onStateChange(state.copy(logs = state.logs.map { if (it.id == updated.id) updated else it }))
                 selectedId = updated.exerciseId
                 editingLog = null
+            },
+        )
+    }
+
+    addingToSession?.let { logs ->
+        val sessionId = sessionKey(logs.maxBy { it.completedAt })
+        AddSessionExerciseDialog(
+            exerciseLibrary = state.exerciseLibrary,
+            existingExerciseIds = logs.mapTo(mutableSetOf()) { it.exerciseId },
+            onDismiss = { addingToSession = null },
+            onAdd = { exercise ->
+                val updated = addExerciseToSession(state.logs, sessionId, exercise)
+                onStateChange(state.copy(logs = updated))
+                selectedId = exercise.id
+                addingToSession = null
+            },
+        )
+    }
+
+    deletingLog?.let { log ->
+        AlertDialog(
+            onDismissRequest = { deletingLog = null },
+            title = { Text("Remove exercise?") },
+            text = { Text("Remove ${log.exerciseName} from this previous workout? Other exercises in the session will remain.") },
+            dismissButton = { TextButton(onClick = { deletingLog = null }) { Text("Cancel") } },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val remaining = deleteSessionExercise(state.logs, log.id)
+                        onStateChange(state.copy(logs = remaining))
+                        if (selectedId == log.exerciseId && remaining.none { it.exerciseId == selectedId }) {
+                            selectedId = remaining.maxByOrNull { it.completedAt }?.exerciseId.orEmpty()
+                        }
+                        deletingLog = null
+                    },
+                ) { Text("Remove") }
             },
         )
     }
@@ -425,6 +476,8 @@ private fun SessionFolder(
     selectedExerciseId: String,
     onSelectExercise: (String) -> Unit,
     onEdit: (WorkoutLog) -> Unit,
+    onAdd: () -> Unit,
+    onRemove: (WorkoutLog) -> Unit,
     onDelete: () -> Unit,
 ) {
     val ordered = logs.sortedBy { it.exerciseName }
@@ -512,7 +565,18 @@ private fun SessionFolder(
                         IconButton(onClick = { onEdit(log) }) {
                             Icon(Icons.Rounded.Edit, contentDescription = "Edit session")
                         }
+                        IconButton(onClick = { onRemove(log) }) {
+                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove exercise")
+                        }
                     }
+                }
+                TextButton(
+                    onClick = onAdd,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 3.dp),
+                    enabled = state.exerciseLibrary.any { exercise -> logs.none { it.exerciseId == exercise.id } },
+                ) {
+                    Icon(Icons.Rounded.Add, contentDescription = null)
+                    Text("ADD EXERCISE")
                 }
             }
         }
@@ -523,9 +587,19 @@ private fun SessionFolder(
 private fun EditSessionDialog(
     log: WorkoutLog,
     unitLabel: String,
+    exerciseLibrary: List<ExerciseDefinition>,
+    unavailableExerciseIds: Set<String>,
     onDismiss: () -> Unit,
     onSave: (WorkoutLog) -> Unit,
 ) {
+    val exerciseOptions = remember(log, exerciseLibrary, unavailableExerciseIds) {
+        (exerciseLibrary + log.toExerciseDefinition())
+            .distinctBy { it.id }
+            .filter { it.id == log.exerciseId || it.id !in unavailableExerciseIds }
+    }
+    var selectedExerciseId by remember(log.id) { mutableStateOf(log.exerciseId) }
+    val selectedExercise = exerciseOptions.firstOrNull { it.id == selectedExerciseId }
+        ?: log.toExerciseDefinition()
     var sets by remember(log.id) { mutableStateOf(log.sets.toString()) }
     var reps by remember(log.id) { mutableStateOf(log.reps.toString()) }
     var weight by remember(log.id) { mutableStateOf(log.weight.toString()) }
@@ -540,7 +614,7 @@ private fun EditSessionDialog(
     val intervalRoundsValue = intervalRounds.toIntOrNull()
     val runSecondsValue = runSeconds.toIntOrNull()
     val walkSecondsValue = walkSeconds.toIntOrNull()
-    val valid = if (log.exerciseType == ExerciseType.RUN_WALK) {
+    val valid = if (selectedExercise.type == ExerciseType.RUN_WALK) {
         intervalRoundsValue != null && intervalRoundsValue > 0 &&
             runSecondsValue != null && runSecondsValue > 0 &&
             walkSecondsValue != null && walkSecondsValue > 0
@@ -553,10 +627,29 @@ private fun EditSessionDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit ${log.exerciseName}") },
+        title = { Text("Edit session exercise") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (log.exerciseType == ExerciseType.RUN_WALK) {
+                SessionExercisePicker(
+                    exercises = exerciseOptions,
+                    selectedExerciseId = selectedExerciseId,
+                    onSelect = { exercise ->
+                        if (exercise.type != selectedExercise.type) {
+                            if (exercise.type == ExerciseType.RUN_WALK) {
+                                intervalRounds = exercise.intervalRounds.toString()
+                                runSeconds = exercise.runSeconds.toString()
+                                walkSeconds = exercise.walkSeconds.toString()
+                            } else {
+                                sets = exercise.targetSets.toString()
+                                reps = exercise.targetReps.toString()
+                                weight = exercise.workingWeight.toString()
+                                failed = "0"
+                            }
+                        }
+                        selectedExerciseId = exercise.id
+                    },
+                )
+                if (selectedExercise.type == ExerciseType.RUN_WALK) {
                     SessionNumberField(intervalRounds, { intervalRounds = it }, "INTERVALS", Modifier.fillMaxWidth())
                     Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                         SessionNumberField(runSeconds, { runSeconds = it }, "RUN SECONDS", Modifier.weight(1f))
@@ -578,19 +671,32 @@ private fun EditSessionDialog(
             Button(
                 onClick = {
                     onSave(
-                        if (log.exerciseType == ExerciseType.RUN_WALK) {
+                        if (selectedExercise.type == ExerciseType.RUN_WALK) {
                             log.copy(
+                                exerciseId = selectedExercise.id,
+                                exerciseName = selectedExercise.name,
                                 sets = requireNotNull(intervalRoundsValue),
+                                reps = 1,
+                                weight = 0.0,
+                                failedSets = 0,
+                                exerciseType = ExerciseType.RUN_WALK,
                                 intervalRounds = intervalRoundsValue,
                                 runSeconds = requireNotNull(runSecondsValue),
                                 walkSeconds = requireNotNull(walkSecondsValue),
+                                setResults = emptyList(),
                             )
                         } else {
                             log.copy(
+                                exerciseId = selectedExercise.id,
+                                exerciseName = selectedExercise.name,
                                 sets = requireNotNull(setsValue),
                                 reps = requireNotNull(repsValue),
                                 weight = requireNotNull(weightValue),
                                 failedSets = requireNotNull(failedValue),
+                                exerciseType = ExerciseType.STRENGTH,
+                                runSeconds = 0,
+                                walkSeconds = 0,
+                                intervalRounds = 0,
                                 setResults = emptyList(),
                             )
                         },
@@ -601,6 +707,105 @@ private fun EditSessionDialog(
         },
     )
 }
+
+@Composable
+private fun AddSessionExerciseDialog(
+    exerciseLibrary: List<ExerciseDefinition>,
+    existingExerciseIds: Set<String>,
+    onDismiss: () -> Unit,
+    onAdd: (ExerciseDefinition) -> Unit,
+) {
+    val available = remember(exerciseLibrary, existingExerciseIds) {
+        exerciseLibrary.filterNot { it.id in existingExerciseIds }
+    }
+    var selectedExerciseId by remember(available) { mutableStateOf("") }
+    val selectedExercise = available.firstOrNull { it.id == selectedExerciseId }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add exercise to session") },
+        text = {
+            if (available.isEmpty()) {
+                Text("Every exercise in the library is already in this session.")
+            } else {
+                SessionExercisePicker(
+                    exercises = available,
+                    selectedExerciseId = selectedExerciseId,
+                    onSelect = { selectedExerciseId = it.id },
+                )
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = {
+            Button(
+                onClick = { selectedExercise?.let(onAdd) },
+                enabled = selectedExercise != null,
+            ) { Text("Add") }
+        },
+    )
+}
+
+@Composable
+private fun SessionExercisePicker(
+    exercises: List<ExerciseDefinition>,
+    selectedExerciseId: String,
+    onSelect: (ExerciseDefinition) -> Unit,
+) {
+    var query by remember(exercises) { mutableStateOf("") }
+    val filtered = remember(exercises, query) { filteredExerciseLibrary(exercises, query) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("SEARCH EXERCISES") },
+            singleLine = true,
+        )
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 180.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            items(filtered, key = { it.id }) { exercise ->
+                val selected = exercise.id == selectedExerciseId
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable { onSelect(exercise) },
+                    color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .14f) else MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+                    shape = CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp),
+                ) {
+                    Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                        Text(
+                            exercise.name,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            if (exercise.type == ExerciseType.RUN_WALK) "RUN / WALK" else "STRENGTH",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 9.sp,
+                        )
+                    }
+                }
+            }
+        }
+        if (filtered.isEmpty()) {
+            Text("NO MATCHING EXERCISES", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+        }
+    }
+}
+
+private fun WorkoutLog.toExerciseDefinition() = ExerciseDefinition(
+    id = exerciseId,
+    name = exerciseName,
+    targetSets = sets.coerceAtLeast(1),
+    targetReps = reps.coerceAtLeast(1),
+    workingWeight = weight,
+    type = exerciseType,
+    runSeconds = runSeconds.coerceAtLeast(1),
+    walkSeconds = walkSeconds.coerceAtLeast(1),
+    intervalRounds = intervalRounds.coerceAtLeast(sets).coerceAtLeast(1),
+)
 
 @Composable
 private fun SessionNumberField(
