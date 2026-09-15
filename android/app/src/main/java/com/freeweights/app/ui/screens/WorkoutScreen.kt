@@ -1,7 +1,9 @@
 package com.freeweights.app.ui.screens
 
+import android.content.Context
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.PowerManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -44,6 +46,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -352,6 +355,7 @@ private fun RunWalkIntervalCard(
     onActiveChange: (ActiveWorkout) -> Unit,
     onSaveExercise: () -> Unit,
 ) {
+    val context = LocalContext.current
     val phase = active.intervalPhase ?: "RUN"
     val completed = active.setResults.size
     val running = active.intervalEndsAt != null
@@ -362,6 +366,20 @@ private fun RunWalkIntervalCard(
     }
     DisposableEffect(toneGenerator) {
         onDispose { toneGenerator?.release() }
+    }
+    DisposableEffect(context, active.intervalEndsAt) {
+        val wakeLock = active.intervalEndsAt?.let { intervalEnd ->
+            val timeout = (intervalEnd - System.currentTimeMillis()).coerceAtLeast(1_000L) + 60_000L
+            (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "${context.packageName}:runWalkInterval")
+                .apply {
+                    setReferenceCounted(false)
+                    acquire(timeout)
+                }
+        }
+        onDispose {
+            if (wakeLock?.isHeld == true) wakeLock.release()
+        }
     }
     fun beep() {
         toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 450)

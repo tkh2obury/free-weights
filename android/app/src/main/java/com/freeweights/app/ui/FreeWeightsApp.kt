@@ -19,6 +19,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,6 +46,7 @@ private data class Destination(val label: String, val icon: ImageVector)
 @Composable
 fun FreeWeightsApp() {
     val context = LocalContext.current
+    val rootView = LocalView.current
     val repository = remember { WorkoutRepository(context.applicationContext) }
     var state by remember { mutableStateOf(repository.load()) }
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -57,6 +60,12 @@ fun FreeWeightsApp() {
     fun updateState(next: AppState) {
         state = next
         repository.save(next)
+    }
+
+    DisposableEffect(rootView, state.activeWorkout != null) {
+        val previousKeepScreenOn = rootView.keepScreenOn
+        rootView.keepScreenOn = state.activeWorkout != null || previousKeepScreenOn
+        onDispose { rootView.keepScreenOn = previousKeepScreenOn }
     }
 
     FreeWeightsTheme(
