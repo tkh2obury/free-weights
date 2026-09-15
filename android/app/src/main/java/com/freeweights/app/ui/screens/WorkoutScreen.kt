@@ -537,8 +537,8 @@ private fun ActiveSetCard(
     )
     val attemptedSets = active.setResults.size
     val currentSet = prescribedSets.getOrNull(attemptedSets)
-    var weightText by remember(active.sessionId, active.currentExerciseIndex, attemptedSets, active.currentWeight) {
-        mutableStateOf(formatPlate(currentSet?.weight ?: active.currentWeight ?: baseWorkingWeight))
+    var weightText by rememberSaveable(active.sessionId, active.currentExerciseIndex, attemptedSets) {
+        mutableStateOf(initialWorkoutWeightText(active.currentWeight, currentSet?.weight, baseWorkingWeight))
     }
     val weight = weightText.toDoubleOrNull()
     val failedSets = active.setResults.count { !it.succeeded && !it.isWarmup }
@@ -671,6 +671,12 @@ private fun ActiveSetCard(
         }
     }
 }
+
+internal fun initialWorkoutWeightText(
+    activeWeight: Double?,
+    prescribedWeight: Double?,
+    baseWorkingWeight: Double,
+): String = formatPlate(activeWeight ?: prescribedWeight ?: baseWorkingWeight)
 
 @Composable
 private fun TerminalPanel(title: String, message: String) {
