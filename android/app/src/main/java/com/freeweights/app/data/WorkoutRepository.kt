@@ -6,6 +6,7 @@ import com.freeweights.app.model.AppState
 import com.freeweights.app.model.ExerciseDefinition
 import com.freeweights.app.model.ExercisePlan
 import com.freeweights.app.model.ExerciseType
+import com.freeweights.app.model.RestTimerState
 import com.freeweights.app.model.WeightUnit
 import com.freeweights.app.model.WorkoutDay
 import com.freeweights.app.model.WorkoutLog
@@ -47,7 +48,7 @@ class WorkoutRepository(context: Context) {
     fun exportPlansJson(state: AppState): String {
         val full = encode(state)
         return JSONObject().apply {
-            put("schemaVersion", 5)
+            put("schemaVersion", 6)
             put("exportType", "plans")
             put("plans", full.getJSONArray("plans"))
             put("exerciseLibrary", full.getJSONArray("exerciseLibrary"))
@@ -62,7 +63,7 @@ class WorkoutRepository(context: Context) {
     }
 
     private fun encode(state: AppState) = JSONObject().apply {
-        put("schemaVersion", 5)
+        put("schemaVersion", 6)
         put("exportType", "full")
         put("unit", state.unit.name)
         put("selectedPlanId", state.selectedPlanId)
@@ -72,6 +73,10 @@ class WorkoutRepository(context: Context) {
         put("kgBarWeight", state.kgBarWeight)
         put("themeTextColor", state.themeTextColor)
         put("themeBackgroundColor", state.themeBackgroundColor)
+        put("preferredWeights", JSONObject().apply {
+            state.preferredWeights.forEach { (trackingId, weight) -> put(trackingId, weight) }
+        })
+        put("restTimer", state.restTimer.toJson())
         put("exerciseLibrary", JSONArray().apply {
             state.exerciseLibrary.forEach { exercise ->
                 put(JSONObject().apply {
@@ -251,6 +256,8 @@ class WorkoutRepository(context: Context) {
             selectedPlanId = selected?.takeIf { id -> plans.any { it.id == id } } ?: plans.firstOrNull()?.id,
             exerciseLibrary = exerciseLibrary,
             activeWorkout = json.optJSONObject("activeWorkout")?.toActiveWorkout(),
+            restTimer = json.optJSONObject("restTimer")?.toRestTimerState() ?: RestTimerState(),
+            preferredWeights = json.optJSONObject("preferredWeights").toDoubleMap(),
             logs = logs,
             availableLbPlates = json.optJSONArray("lbPlates").toDoubleList().ifEmpty { defaultLbPlates },
             availableKgPlates = json.optJSONArray("kgPlates").toDoubleList().ifEmpty { defaultKgPlates },
@@ -300,6 +307,7 @@ class WorkoutRepository(context: Context) {
         put("dayId", dayId)
         put("currentExerciseIndex", currentExerciseIndex)
         put("currentWeight", currentWeight)
+        put("manualWeight", manualWeight)
         put("intervalPhase", intervalPhase)
         put("intervalEndsAt", intervalEndsAt)
         put("intervalPausedSeconds", intervalPausedSeconds)
@@ -344,10 +352,38 @@ class WorkoutRepository(context: Context) {
             currentExerciseIndex = optInt("currentExerciseIndex", 0),
             setResults = results,
             currentWeight = if (has("currentWeight") && !isNull("currentWeight")) getDouble("currentWeight") else null,
+            manualWeight = if (has("manualWeight") && !isNull("manualWeight")) getDouble("manualWeight") else null,
             intervalPhase = optString("intervalPhase").takeIf { it.isNotBlank() && it != "null" },
             intervalEndsAt = if (has("intervalEndsAt") && !isNull("intervalEndsAt")) getLong("intervalEndsAt") else null,
             intervalPausedSeconds = if (has("intervalPausedSeconds") && !isNull("intervalPausedSeconds")) getInt("intervalPausedSeconds") else null,
         )
+    }
+
+    private fun RestTimerState.toJson() = JSONObject().apply {
+        put("durationSeconds", durationSeconds)
+        put("pausedRemainingSeconds", pausedRemainingSeconds)
+        put("endsAt", endsAt)
+        put("title", title)
+        put("ownerKey", ownerKey)
+    }
+
+    private fun JSONObject.toRestTimerState() = RestTimerState(
+        durationSeconds = optInt("durationSeconds", 90).coerceAtLeast(1),
+        pausedRemainingSeconds = optInt("pausedRemainingSeconds", 90).coerceAtLeast(0),
+        endsAt = if (has("endsAt") && !isNull("endsAt")) getLong("endsAt") else null,
+        title = optString("title", "REST TIMER"),
+        ownerKey = optString("ownerKey").takeIf { it.isNotBlank() && it != "null" },
+    )
+
+    private fun JSONObject?.toDoubleMap(): Map<String, Double> {
+        if (this == null) return emptyMap()
+        return buildMap {
+            val names = keys()
+            while (names.hasNext()) {
+                val name = names.next()
+                optDouble(name).takeIf { it.isFinite() && it >= 0.0 }?.let { put(name, it) }
+            }
+        }
     }
 
     private fun JSONObject.exerciseType(key: String): ExerciseType =

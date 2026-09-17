@@ -39,40 +39,62 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.freeweights.app.model.RestTimerState
 import com.freeweights.app.model.WeightUnit
 import com.freeweights.app.util.PlateLoad
+import com.freeweights.app.util.pauseRestTimer
+import com.freeweights.app.util.remainingTimerSeconds
+import com.freeweights.app.util.resetRestTimer
+import com.freeweights.app.util.startRestTimer
 import kotlinx.coroutines.delay
 
 @Composable
-fun RestTimerPanel(initialDuration: Int = 90, title: String = "REST TIMER") {
-    val context = LocalContext.current
-    var duration by rememberSaveable(initialDuration) { mutableIntStateOf(initialDuration.coerceAtLeast(1)) }
-    var remaining by rememberSaveable(initialDuration) { mutableIntStateOf(initialDuration.coerceAtLeast(1)) }
-    var running by rememberSaveable(initialDuration) { mutableStateOf(false) }
-    var customText by rememberSaveable(initialDuration) { mutableStateOf(initialDuration.toString()) }
-    val progress = remaining.toFloat() / duration.coerceAtLeast(1)
+fun RestTimerPanel(
+    timer: RestTimerState,
+    onTimerChange: (RestTimerState) -> Unit,
+    initialDuration: Int = 90,
+    title: String = "REST TIMER",
+    ownerKey: String = "tools",
+) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var customText by rememberSaveable(timer.durationSeconds) { mutableStateOf(timer.durationSeconds.toString()) }
+    val running = timer.endsAt != null
+    val remaining = remainingTimerSeconds(timer, now)
+    val progress = remaining.toFloat() / timer.durationSeconds.coerceAtLeast(1)
 
-    LaunchedEffect(running, remaining) {
-        if (!running) return@LaunchedEffect
-        if (remaining > 0) {
-            delay(1_000)
-            remaining -= 1
-        } else {
-            running = false
-            signalTimerDone(context)
+    LaunchedEffect(ownerKey, initialDuration, timer.ownerKey) {
+        if (timer.ownerKey == null) {
+            val duration = initialDuration.coerceAtLeast(1)
+            onTimerChange(
+                timer.copy(
+                    durationSeconds = duration,
+                    pausedRemainingSeconds = duration,
+                    title = title,
+                    ownerKey = ownerKey,
+                ),
+            )
         }
+    }
+
+    LaunchedEffect(timer.endsAt) {
+        val end = timer.endsAt ?: return@LaunchedEffect
+        while (System.currentTimeMillis() < end) {
+            now = System.currentTimeMillis()
+            delay(200)
+        }
+        now = System.currentTimeMillis()
     }
 
     Surface(
@@ -83,8 +105,8 @@ fun RestTimerPanel(initialDuration: Int = 90, title: String = "REST TIMER") {
     ) {
         Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(title, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.Black)
-                IconButton(onClick = { remaining = duration; running = false }) {
+                Text(timer.title, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.Black)
+                IconButton(onClick = { onTimerChange(resetRestTimer(timer)) }) {
                     Icon(Icons.Rounded.Refresh, contentDescription = "Reset timer")
                 }
             }
@@ -110,12 +132,18 @@ fun RestTimerPanel(initialDuration: Int = 90, title: String = "REST TIMER") {
             ) {
                 listOf(60, 90, 120, 180).forEach { seconds ->
                     FilterChip(
-                        selected = duration == seconds,
+                        selected = timer.durationSeconds == seconds,
                         onClick = {
-                            duration = seconds
-                            remaining = seconds
                             customText = seconds.toString()
-                            running = false
+                            onTimerChange(
+                                timer.copy(
+                                    durationSeconds = seconds,
+                                    pausedRemainingSeconds = seconds,
+                                    endsAt = null,
+                                    title = title,
+                                    ownerKey = ownerKey,
+                                ),
+                            )
                         },
                         label = { Text(formatDuration(seconds)) },
                         colors = FilterChipDefaults.filterChipColors(
@@ -132,9 +160,15 @@ fun RestTimerPanel(initialDuration: Int = 90, title: String = "REST TIMER") {
                     if (next.length <= 6 && next.all { it.isDigit() || it == ':' }) {
                         customText = next
                         parseRestTime(next)?.takeIf { it > 0 }?.let { seconds ->
-                            duration = seconds
-                            remaining = seconds
-                            running = false
+                            onTimerChange(
+                                timer.copy(
+                                    durationSeconds = seconds,
+                                    pausedRemainingSeconds = seconds,
+                                    endsAt = null,
+                                    title = title,
+                                    ownerKey = ownerKey,
+                                ),
+                            )
                         }
                     }
                 },
@@ -146,8 +180,8 @@ fun RestTimerPanel(initialDuration: Int = 90, title: String = "REST TIMER") {
             Spacer(Modifier.height(12.dp))
             Button(
                 onClick = {
-                    if (remaining == 0) remaining = duration
-                    running = !running
+                    val owned = timer.copy(title = title, ownerKey = ownerKey)
+                    onTimerChange(if (running) pauseRestTimer(owned) else startRestTimer(owned))
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = CutCornerShape(8.dp),
@@ -270,7 +304,7 @@ private fun OlympicPlateColor.label(): Color = when (this) {
 
 fun formatPlate(value: Double): String = if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()
 
-private fun signalTimerDone(context: Context) {
+internal fun signalTimerDone(context: Context) {
     runCatching {
         ToneGenerator(AudioManager.STREAM_ALARM, 85).apply {
             startTone(ToneGenerator.TONE_PROP_BEEP2, 700)

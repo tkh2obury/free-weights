@@ -1,5 +1,7 @@
 package com.freeweights.app.ui
 
+import android.content.Context
+import android.os.PowerManager
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,10 +22,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -35,11 +39,15 @@ import androidx.compose.ui.unit.sp
 import com.freeweights.app.BuildConfig
 import com.freeweights.app.data.WorkoutRepository
 import com.freeweights.app.model.AppState
+import com.freeweights.app.model.ExerciseType
 import com.freeweights.app.ui.screens.PlanScreen
 import com.freeweights.app.ui.screens.ProgressScreen
 import com.freeweights.app.ui.screens.ToolsScreen
 import com.freeweights.app.ui.screens.WorkoutScreen
+import com.freeweights.app.ui.screens.advanceRunWalkPhase
 import com.freeweights.app.ui.theme.FreeWeightsTheme
+import com.freeweights.app.util.completedRestTimer
+import kotlinx.coroutines.delay
 
 private data class Destination(val label: String, val icon: ImageVector)
 
@@ -62,9 +70,53 @@ fun FreeWeightsApp() {
         repository.save(next)
     }
 
-    DisposableEffect(rootView, state.activeWorkout != null) {
+    val latestState by rememberUpdatedState(state)
+    val intervalEndsAt = state.activeWorkout?.intervalEndsAt
+    val restEndsAt = state.restTimer.endsAt
+
+    LaunchedEffect(restEndsAt) {
+        val end = restEndsAt ?: return@LaunchedEffect
+        delay((end - System.currentTimeMillis()).coerceAtLeast(0L))
+        val current = latestState
+        if (current.restTimer.endsAt == end) {
+            signalTimerDone(context)
+            updateState(current.copy(restTimer = completedRestTimer(current.restTimer)))
+        }
+    }
+
+    LaunchedEffect(intervalEndsAt, state.activeWorkout?.intervalPhase, state.activeWorkout?.currentExerciseIndex) {
+        val end = intervalEndsAt ?: return@LaunchedEffect
+        delay((end - System.currentTimeMillis()).coerceAtLeast(0L))
+        val current = latestState
+        val active = current.activeWorkout ?: return@LaunchedEffect
+        if (active.intervalEndsAt != end) return@LaunchedEffect
+        val plan = current.plans.firstOrNull { it.id == active.planId } ?: return@LaunchedEffect
+        val day = plan.days.firstOrNull { it.id == active.dayId } ?: return@LaunchedEffect
+        val exercise = day.exercises.getOrNull(active.currentExerciseIndex) ?: return@LaunchedEffect
+        if (exercise.type != ExerciseType.RUN_WALK) return@LaunchedEffect
+        signalTimerDone(context)
+        updateState(current.copy(activeWorkout = advanceRunWalkPhase(active, exercise, end)))
+    }
+
+    DisposableEffect(context, restEndsAt, intervalEndsAt) {
+        val latestEnd = listOfNotNull(restEndsAt, intervalEndsAt).maxOrNull()
+        val wakeLock = latestEnd?.let { end ->
+            val timeout = (end - System.currentTimeMillis()).coerceAtLeast(1_000L) + 60_000L
+            (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "${context.packageName}:activeTimer")
+                .apply {
+                    setReferenceCounted(false)
+                    acquire(timeout)
+                }
+        }
+        onDispose {
+            if (wakeLock?.isHeld == true) wakeLock.release()
+        }
+    }
+
+    DisposableEffect(rootView, state.activeWorkout != null, restEndsAt != null) {
         val previousKeepScreenOn = rootView.keepScreenOn
-        rootView.keepScreenOn = state.activeWorkout != null || previousKeepScreenOn
+        rootView.keepScreenOn = state.activeWorkout != null || restEndsAt != null || previousKeepScreenOn
         onDispose { rootView.keepScreenOn = previousKeepScreenOn }
     }
 

@@ -77,7 +77,10 @@ fun ToolsScreen(state: AppState, onStateChange: (AppState) -> Unit) {
         item { SectionHeader("Training tools") }
         item {
             CollapsibleTool("REST TIMER", initiallyExpanded = true) {
-                RestTimerPanel()
+                RestTimerPanel(
+                    timer = state.restTimer,
+                    onTimerChange = { onStateChange(state.copy(restTimer = it)) },
+                )
             }
         }
         item {

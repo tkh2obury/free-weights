@@ -79,9 +79,18 @@ data class ActiveWorkout(
     val currentExerciseIndex: Int = 0,
     val setResults: List<WorkoutSetResult> = emptyList(),
     val currentWeight: Double? = null,
+    val manualWeight: Double? = null,
     val intervalPhase: String? = null,
     val intervalEndsAt: Long? = null,
     val intervalPausedSeconds: Int? = null,
+)
+
+data class RestTimerState(
+    val durationSeconds: Int = 90,
+    val pausedRemainingSeconds: Int = 90,
+    val endsAt: Long? = null,
+    val title: String = "REST TIMER",
+    val ownerKey: String? = null,
 )
 
 data class WorkoutLog(
@@ -121,6 +130,8 @@ data class AppState(
     val selectedPlanId: String? = null,
     val exerciseLibrary: List<ExerciseDefinition> = emptyList(),
     val activeWorkout: ActiveWorkout? = null,
+    val restTimer: RestTimerState = RestTimerState(),
+    val preferredWeights: Map<String, Double> = emptyMap(),
     val logs: List<WorkoutLog> = emptyList(),
     val availableLbPlates: List<Double> = defaultLbPlates,
     val availableKgPlates: List<Double> = defaultKgPlates,

@@ -62,5 +62,6 @@ fun deleteLibraryExercise(state: AppState, exerciseId: String): AppState {
             )
         },
         activeWorkout = if (activeUsesExercise) null else active,
+        preferredWeights = state.preferredWeights - exerciseId,
     )
 }

@@ -2,7 +2,7 @@
 
 I made Free Weights to be free, open source, and completely ad-free. The Android app is built natively with Kotlin and Jetpack Compose.
 
-Current build: 2.12.0. The version is shown in the app header for installation verification.
+Current build: 2.12.4. The version is shown in the app header for installation verification.
 
 ## Included
 

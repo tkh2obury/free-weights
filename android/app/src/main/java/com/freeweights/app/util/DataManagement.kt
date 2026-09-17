@@ -12,6 +12,7 @@ fun deleteAllPlans(state: AppState): AppState = state.copy(
 
 fun deleteAllExercises(state: AppState): AppState = state.copy(
     exerciseLibrary = emptyList(),
+    preferredWeights = emptyMap(),
     plans = state.plans.map { plan ->
         plan.copy(days = plan.days.map { day -> day.copy(exercises = emptyList()) })
     },

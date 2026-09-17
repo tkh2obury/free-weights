@@ -1,9 +1,7 @@
 package com.freeweights.app.ui.screens
 
-import android.content.Context
 import android.media.AudioManager
 import android.media.ToneGenerator
-import android.os.PowerManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -46,7 +44,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,7 +65,9 @@ import com.freeweights.app.util.calculatePlates
 import com.freeweights.app.util.configuredSetWeight
 import com.freeweights.app.util.PrescribedLiftSet
 import com.freeweights.app.util.prescribedLiftSets
+import com.freeweights.app.util.prepareExerciseRestTimer
 import com.freeweights.app.util.nextWorkoutDayId
+import com.freeweights.app.util.nextWorkoutSetWeight
 import com.freeweights.app.util.suggestedWeight
 import kotlinx.coroutines.delay
 import kotlin.math.ceil
@@ -93,12 +92,15 @@ fun WorkoutScreen(state: AppState, onStateChange: (AppState) -> Unit) {
         availablePlates = state.availablePlates(),
     )
 
+    fun workingWeight(exercise: ExercisePlan, logs: List<WorkoutLog>): Double =
+        state.preferredWeights[exercise.trackingId] ?: suggestedWeight(exercise, logs)
+
     fun firstSetWeight(exercise: ExercisePlan, logs: List<WorkoutLog>): Double = prescribedLiftSets(
         exercise = exercise,
-        workingWeight = suggestedWeight(exercise, logs),
+        workingWeight = workingWeight(exercise, logs),
         barWeight = state.barWeight(),
         availablePlates = state.availablePlates(),
-    ).firstOrNull()?.weight ?: resolvedSetWeight(suggestedWeight(exercise, logs))
+    ).firstOrNull()?.weight ?: resolvedSetWeight(workingWeight(exercise, logs))
 
     LaunchedEffect(selectedPlan?.id, selectedPlan?.days?.map { it.id }) {
         if (selectedPlan?.days?.none { it.id == selectedDayId } != false) {
@@ -142,9 +144,16 @@ fun WorkoutScreen(state: AppState, onStateChange: (AppState) -> Unit) {
             onStateChange(
                 state.copy(
                     logs = updatedLogs,
+                    restTimer = prepareExerciseRestTimer(
+                        timer = state.restTimer,
+                        durationSeconds = nextExercise.restSeconds,
+                        title = "REST / ${nextExercise.name.uppercase()}",
+                        ownerKey = nextExercise.trackingId,
+                    ),
                     activeWorkout = workout.copy(
                         currentExerciseIndex = nextIndex,
                         setResults = emptyList(),
+                        manualWeight = null,
                         currentWeight = if (nextExercise.type == ExerciseType.RUN_WALK) {
                             0.0
                         } else {
@@ -249,6 +258,12 @@ fun WorkoutScreen(state: AppState, onStateChange: (AppState) -> Unit) {
                                 val firstExercise = selectedDay.exercises.first()
                                 onStateChange(
                                     state.copy(
+                                        restTimer = prepareExerciseRestTimer(
+                                            timer = state.restTimer,
+                                            durationSeconds = firstExercise.restSeconds,
+                                            title = "REST / ${firstExercise.name.uppercase()}",
+                                            ownerKey = firstExercise.trackingId,
+                                        ),
                                         activeWorkout = ActiveWorkout(
                                             planId = plan.id,
                                             dayId = selectedDay.id,
@@ -314,8 +329,17 @@ fun WorkoutScreen(state: AppState, onStateChange: (AppState) -> Unit) {
                     active = active,
                     exercise = currentExercise,
                     exerciseCount = activeDay.exercises.size,
-                    onWeightChange = { weight ->
-                        onStateChange(state.copy(activeWorkout = active.copy(currentWeight = weight)))
+                    onWeightChange = { weight, isWarmup ->
+                        onStateChange(
+                            state.copy(
+                                activeWorkout = active.copy(currentWeight = weight, manualWeight = weight),
+                                preferredWeights = if (isWarmup) {
+                                    state.preferredWeights
+                                } else {
+                                    state.preferredWeights + (currentExercise.trackingId to weight)
+                                },
+                            ),
+                        )
                     },
                     onSetResult = { succeeded, prescribed ->
                         val result = WorkoutSetResult(
@@ -329,15 +353,26 @@ fun WorkoutScreen(state: AppState, onStateChange: (AppState) -> Unit) {
                         val updatedResults = active.setResults + result
                         val sequence = prescribedLiftSets(
                             exercise = currentExercise,
-                            workingWeight = suggestedWeight(currentExercise, state.logs),
+                            workingWeight = state.preferredWeights[currentExercise.trackingId]
+                                ?: suggestedWeight(currentExercise, state.logs),
                             barWeight = state.barWeight(),
                             availablePlates = state.availablePlates(),
                         )
-                        val nextWeight = sequence.getOrNull(updatedResults.size)?.weight ?: prescribed.weight
+                        val nextWeight = nextWorkoutSetWeight(
+                            active,
+                            sequence.getOrNull(updatedResults.size)?.weight ?: prescribed.weight,
+                        )
                         onStateChange(state.copy(activeWorkout = active.copy(setResults = updatedResults, currentWeight = nextWeight)))
                     },
                     onUndo = { weight ->
-                        onStateChange(state.copy(activeWorkout = active.copy(setResults = active.setResults.dropLast(1), currentWeight = weight)))
+                        onStateChange(
+                            state.copy(
+                                activeWorkout = active.copy(
+                                    setResults = active.setResults.dropLast(1),
+                                    currentWeight = active.manualWeight ?: weight,
+                                ),
+                            ),
+                        )
                     },
                     onSaveExercise = ::saveCurrentExercise,
                 )
@@ -355,7 +390,6 @@ private fun RunWalkIntervalCard(
     onActiveChange: (ActiveWorkout) -> Unit,
     onSaveExercise: () -> Unit,
 ) {
-    val context = LocalContext.current
     val phase = active.intervalPhase ?: "RUN"
     val completed = active.setResults.size
     val running = active.intervalEndsAt != null
@@ -367,20 +401,6 @@ private fun RunWalkIntervalCard(
     DisposableEffect(toneGenerator) {
         onDispose { toneGenerator?.release() }
     }
-    DisposableEffect(context, active.intervalEndsAt) {
-        val wakeLock = active.intervalEndsAt?.let { intervalEnd ->
-            val timeout = (intervalEnd - System.currentTimeMillis()).coerceAtLeast(1_000L) + 60_000L
-            (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
-                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "${context.packageName}:runWalkInterval")
-                .apply {
-                    setReferenceCounted(false)
-                    acquire(timeout)
-                }
-        }
-        onDispose {
-            if (wakeLock?.isHeld == true) wakeLock.release()
-        }
-    }
     fun beep() {
         toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 450)
     }
@@ -390,15 +410,13 @@ private fun RunWalkIntervalCard(
         active.intervalPausedSeconds ?: phaseDuration
     }
 
-    LaunchedEffect(active.intervalEndsAt, phase, completed) {
+    LaunchedEffect(active.intervalEndsAt) {
         val end = active.intervalEndsAt ?: return@LaunchedEffect
         while (System.currentTimeMillis() < end) {
             now = System.currentTimeMillis()
             delay(200)
         }
         now = System.currentTimeMillis()
-        beep()
-        onActiveChange(advanceRunWalkPhase(active, exercise, System.currentTimeMillis()))
     }
 
     Surface(
@@ -541,12 +559,12 @@ private fun ActiveSetCard(
     active: ActiveWorkout,
     exercise: ExercisePlan,
     exerciseCount: Int,
-    onWeightChange: (Double) -> Unit,
+    onWeightChange: (Double, Boolean) -> Unit,
     onSetResult: (Boolean, PrescribedLiftSet) -> Unit,
     onUndo: (Double) -> Unit,
     onSaveExercise: () -> Unit,
 ) {
-    val baseWorkingWeight = suggestedWeight(exercise, state.logs)
+    val baseWorkingWeight = state.preferredWeights[exercise.trackingId] ?: suggestedWeight(exercise, state.logs)
     val prescribedSets = prescribedLiftSets(
         exercise = exercise,
         workingWeight = baseWorkingWeight,
@@ -616,7 +634,7 @@ private fun ActiveSetCard(
                     onValueChange = { next ->
                         if (next.isEmpty() || next.all { it.isDigit() || it == '.' }) {
                             weightText = next
-                            next.toDoubleOrNull()?.let(onWeightChange)
+                            next.toDoubleOrNull()?.let { onWeightChange(it, currentSet?.isWarmup == true) }
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -685,7 +703,13 @@ private fun ActiveSetCard(
         }
 
         key(exercise.id) {
-            RestTimerPanel(initialDuration = exercise.restSeconds, title = "REST / ${exercise.name.uppercase()}")
+            RestTimerPanel(
+                timer = state.restTimer,
+                onTimerChange = { onStateChange(state.copy(restTimer = it)) },
+                initialDuration = exercise.restSeconds,
+                title = "REST / ${exercise.name.uppercase()}",
+                ownerKey = exercise.trackingId,
+            )
         }
     }
 }
